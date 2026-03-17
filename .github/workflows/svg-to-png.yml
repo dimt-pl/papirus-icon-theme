@@ -6,28 +6,71 @@ on:
 jobs:
   convert:
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]   # 6 równoległych jobów
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          
+
       - name: Install Inkscape
         run: sudo apt-get update && sudo apt-get install -y inkscape
 
-      - name: Convert SVG to PNG
+      - name: Split work and convert
         run: |
           mkdir -p png
-          for f in $(find . -name "*.svg"); do
+
+          # lista wszystkich SVG
+          find Papirus Papirus-Dark Papirus-Light -name "*.svg" > all_files.txt
+
+          # podział na części
+          split -n l/10 all_files.txt files_part_
+
+          # wybór odpowiedniej części dla tego joba
+          PART_FILE=$(ls files_part_* | sed -n "$(( ${{ matrix.part }} + 1 ))p")
+
+          echo "Processing $PART_FILE"
+
+          while read f; do
             out="png/${f%.svg}.png"
             mkdir -p "$(dirname "$out")"
+
             inkscape "$f" --export-type=png --export-filename="$out"
-          done
+          done < $PART_FILE
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: png-part-${{ matrix.part }}
+          path: png
+
+  merge:
+    needs: convert
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download all parts
+        uses: actions/download-artifact@v4
+        with:
+          path: png_all
+
+      - name: Merge files
+        run: |
+          mkdir -p png
+          cp -r png_all/*/* png/ || true
 
       - name: Commit PNGs
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git add png || true
+
+          git add png
           git commit -m "Auto-generate PNGs" || echo "No changes"
+
           git push
