@@ -3,6 +3,9 @@ name: Convert SVG to PNG
 on:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   convert:
     runs-on: ubuntu-latest
@@ -10,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]   # 6 równoległych jobów
+        part: [0,1,2,3,4,5,6,7,8,9]
 
     steps:
       - name: Checkout repo
@@ -19,27 +22,30 @@ jobs:
       - name: Install Inkscape
         run: sudo apt-get update && sudo apt-get install -y inkscape
 
-      - name: Split work and convert
+      - name: Prepare file list
+        run: |
+          find Papirus Papirus-Dark Papirus-Light -name "*.svg" | sort > all_files.txt
+          split -d -n l/10 all_files.txt files_part_
+
+      - name: Convert SVG to PNG
         run: |
           mkdir -p png
 
-          # lista wszystkich SVG
-          find Papirus Papirus-Dark Papirus-Light -name "*.svg" > all_files.txt
+          PART_FILE=$(printf "files_part_%02d" ${{ matrix.part }})
 
-          # podział na części
-          split -n l/10 all_files.txt files_part_
+          echo "Using file: $PART_FILE"
 
-          # wybór odpowiedniej części dla tego joba
-          PART_FILE=$(ls files_part_* | sed -n "$(( ${{ matrix.part }} + 1 ))p")
+          if [ ! -f "$PART_FILE" ]; then
+            echo "No file for this part, skipping"
+            exit 0
+          fi
 
-          echo "Processing $PART_FILE"
-
-          while read f; do
+          while IFS= read -r f; do
             out="png/${f%.svg}.png"
             mkdir -p "$(dirname "$out")"
 
             inkscape "$f" --export-type=png --export-filename="$out"
-          done < $PART_FILE
+          done < "$PART_FILE"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -50,6 +56,8 @@ jobs:
   merge:
     needs: convert
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repo
@@ -58,12 +66,16 @@ jobs:
       - name: Download all parts
         uses: actions/download-artifact@v4
         with:
-          path: png_all
+          path: artifacts
 
-      - name: Merge files
+      - name: Merge all PNGs
         run: |
           mkdir -p png
-          cp -r png_all/*/* png/ || true
+          find artifacts -type f -name "*.png" | while read f; do
+            target="png/${f#*/png/}"
+            mkdir -p "$(dirname "$target")"
+            cp "$f" "$target"
+          done
 
       - name: Commit PNGs
         run: |
